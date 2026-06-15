@@ -61,7 +61,7 @@
         <div class="card">
           <div class="card-body">
             <h2 class="h5 mb-3">カレンダー</h2>
-            <iframe id="calendarFrame" data-base-src="https://calendar.google.com/calendar/embed?src=c783fba13e88c78e042cc9bdc246794e50f700024cc0aadd87b4987b0ae3d4ba%40group.calendar.google.com&ctz=Asia%2FTokyo" src="https://calendar.google.com/calendar/embed?src=c783fba13e88c78e042cc9bdc246794e50f700024cc0aadd87b4987b0ae3d4ba%40group.calendar.google.com&ctz=Asia%2FTokyo" style="border: 0" width="800" height="600" frameborder="0" scrolling="no"></iframe>
+           <iframe id="calendarFrame" data-base-src="https://calendar.google.com/calendar/embed?src=0b49bd04879c5b2766ad625fdf99afd7ef3d22e443060d03e826bf4c415d55f7%40group.calendar.google.com&ctz=Asia%2FTokyo" src="https://calendar.google.com/calendar/embed?src=0b49bd04879c5b2766ad625fdf99afd7ef3d22e443060d03e826bf4c415d55f7%40group.calendar.google.com&ctz=Asia%2FTokyo" style="border: 0" width="800" height="600" frameborder="0" scrolling="no"></iframe>
           </div>
         </div>
       </div>
@@ -70,7 +70,7 @@
 
 <script>
   // GASをWebアプリとしてデプロイ後、「ウェブアプリURL」を貼り付けてください。
-  const GAS_ENDPOINT = 'https://script.google.com/macros/s/AKfycbxgyNVcaixan5tRCSn2MGUR9ebLOPXN-Kcq8NhrjwwNNFye0xUWTbRteJ88NRDq3ox1LA/exec';
+  const GAS_ENDPOINT = 'https://script.google.com/macros/s/AKfycbyO8A5mrjZ-37uKIKivz1QGq6Tw5Mt--peu5iRcKQOeVwSmSa3N3krflQudYOiPrJ-7/exec';
 
   // GASのSettingsシートのGAS_API_KEYと同じ値にしてください。
   const API_KEY = '8169';
@@ -205,8 +205,9 @@
         durationMinutes: durationMinutes
       });
       setStatus('success', data.message + '<br>' + data.reservation.resourceName + ' / ' + data.reservation.dateLabel + ' ' + data.reservation.startTime + '-' + data.reservation.endTime);
-      refreshCalendar();
       await loadOptions();
+      refreshCalendar();
+      setTimeout(refreshCalendar, 3000);
     } catch (err) {
       setStatus('danger', err.message || String(err));
       await loadOptions();
