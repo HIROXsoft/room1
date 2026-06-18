@@ -50,6 +50,7 @@
     .usage-panel-free { background: linear-gradient(135deg, #00a870 0%, #007a52 100%); }
     .usage-panel-busy { background: linear-gradient(135deg, #d93025 0%, #9f1d16 100%); }
     .usage-panel-checking { background: linear-gradient(135deg, #2563eb 0%, #1e40af 100%); }
+    .usage-panel-closed { background: linear-gradient(135deg, #8b95a1 0%, #59616d 100%); }
     .usage-content { position: relative; z-index: 1; }
     .usage-top { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 14px; }
     .usage-label {
@@ -170,6 +171,11 @@
   // SettingsシートのQUICK_RESOURCE_IDと合わせてください。
   const RESOURCE_ID = 'room-1';
 
+  // 利用可能時間はGASのResourceシート由来の値を使用します。
+  // HTML側には固定の営業時間を持たせません。
+  let operatingHours = { startTime: '', endTime: '' };
+  // quickOptionsで本日の予約候補が0件だった場合も、空室ではなく時間外扱いにします。
+  let noAvailableStartsForToday = false;
   let latestOptions = null;
   const CALENDAR_AUTO_REFRESH_INTERVAL_MS = 5 * 60 * 1000;
 
@@ -227,17 +233,21 @@
     try {
       const data = await jsonp({ api: 'quickOptions' });
       latestOptions = data;
+      updateOperatingHours(data);
+      noAvailableStartsForToday = !data.starts || !data.starts.length;
       renderCurrentStatus(data.currentStatus);
       renderStartOptions(data.starts || [], data.defaultStartTime || '');
       renderDurations(data.durations || []);
-      if (!data.starts || !data.starts.length) {
-        setStatus('warning', '本日予約受付は終了しました');
+      if (noAvailableStartsForToday) {
+        const hoursLabel = getOperatingHoursLabel();
+        setStatus('secondary', '現在は利用時間外です' + (hoursLabel ? '（利用可能時間 ' + hoursLabel + '）' : ''));
       } else {
         setStatus('success', data.dateLabel + ' ' + formatCurrentTimeLabel() + ' 現在');
       }
       if (shouldRefreshCalendarFrame) refreshCalendar();
     } catch (err) {
       setStatus('danger', err.message || String(err));
+      noAvailableStartsForToday = false;
       renderCurrentStatus(null, err.message || String(err));
       renderStartOptions([], '');
       renderDurations([]);
@@ -298,6 +308,7 @@
   async function refreshCurrentStatus() {
     try {
       const data = await jsonp({ api: 'quickStatus' });
+      updateOperatingHours(data);
       renderCurrentStatus(data.currentStatus);
     } catch (err) {
       renderCurrentStatus(null, err.message || String(err));
@@ -307,6 +318,10 @@
   function renderCurrentStatus(status, errorMessage) {
     const el = document.getElementById('currentUsage');
     if (!el) return;
+    if (!errorMessage && isOutsideOperatingHours(status)) {
+      renderClosedStatus(el, status);
+      return;
+    }
     if (errorMessage) {
       el.className = 'usage-box usage-panel-busy mb-3';
       el.innerHTML = '<div class="usage-content">' +
@@ -345,6 +360,105 @@
         '<div class="usage-action-hint">このまま下のボタンから予約できます</div>' +
         '</div>';
     }
+  }
+
+  function renderClosedStatus(el, status) {
+    const checkedAt = status && status.checkedAt ? status.checkedAt : formatCurrentTimeLabel();
+    const hoursLabel = getOperatingHoursLabel();
+    const detail = (hoursLabel ? '利用可能時間 ' + hoursLabel + ' / ' : '') + '確認 ' + checkedAt;
+    el.className = 'usage-box usage-panel-closed mb-3';
+    el.innerHTML = '<div class="usage-content">' +
+      '<div class="usage-top"><span class="usage-label"><span class="usage-dot"></span>利用時間外</span><span class="usage-icon">−</span></div>' +
+      '<div class="usage-title">時間外</div>' +
+      '<div class="usage-message">現在は会議室の利用時間外です。</div>' +
+      '<div class="usage-detail">' + escapeHtml(detail) + '</div>' +
+      '</div>';
+  }
+
+  function updateOperatingHours(data) {
+    const source = findOperatingHoursSource(data);
+    const startTime = normalizeTimeValue(
+      pickFirstValue(source, ['operatingStartTime', 'businessStartTime', 'usageStartTime', 'availableStartTime', 'openTime', 'startTime', 'start'])
+    );
+    const endTime = normalizeTimeValue(
+      pickFirstValue(source, ['operatingEndTime', 'businessEndTime', 'usageEndTime', 'availableEndTime', 'closeTime', 'endTime', 'end'])
+    );
+    if (startTime && endTime) {
+      operatingHours = { startTime, endTime };
+    }
+  }
+
+  function findOperatingHoursSource(data) {
+    const candidates = [];
+    if (data) {
+      candidates.push(data);
+      candidates.push(data.resource);
+      candidates.push(data.currentStatus);
+      candidates.push(data.businessHours);
+      candidates.push(data.operatingHours);
+      candidates.push(data.openHours);
+      if (data.currentStatus) {
+        candidates.push(data.currentStatus.resource);
+        candidates.push(data.currentStatus.businessHours);
+        candidates.push(data.currentStatus.operatingHours);
+        candidates.push(data.currentStatus.openHours);
+      }
+    }
+    return candidates.find(obj => obj && typeof obj === 'object' && hasAnyOperatingHourKey(obj)) || null;
+  }
+
+  function hasAnyOperatingHourKey(obj) {
+    const keys = ['operatingStartTime', 'businessStartTime', 'usageStartTime', 'availableStartTime', 'openTime', 'startTime', 'start', 'operatingEndTime', 'businessEndTime', 'usageEndTime', 'availableEndTime', 'closeTime', 'endTime', 'end'];
+    return keys.some(key => Object.prototype.hasOwnProperty.call(obj, key));
+  }
+
+  function pickFirstValue(obj, keys) {
+    if (!obj || typeof obj !== 'object') return '';
+    for (const key of keys) {
+      if (obj[key] != null && String(obj[key]).trim() !== '') return obj[key];
+    }
+    return '';
+  }
+
+  function getOperatingHoursLabel() {
+    if (!operatingHours.startTime || !operatingHours.endTime) return '';
+    return operatingHours.startTime + '〜' + operatingHours.endTime;
+  }
+
+  function isOutsideOperatingHours(status) {
+    if (status && status.outsideHours === true) return true;
+    if (status && status.isOutsideHours === true) return true;
+    if (status && status.withinBusinessHours === false) return true;
+
+    // GAS側の営業時間がレスポンスに含まれない環境でも、
+    // quickOptionsの予約候補が0件なら「空室」ではなく「時間外」として表示します。
+    // ただし現在使用中の場合は「使用中」を優先します。
+    if (noAvailableStartsForToday && !(status && status.using)) return true;
+
+    const startMinutes = timeToMinutes(operatingHours.startTime);
+    const endMinutes = timeToMinutes(operatingHours.endTime);
+    if (startMinutes == null || endMinutes == null) return false;
+
+    const now = new Date();
+    const currentMinutes = now.getHours() * 60 + now.getMinutes();
+    if (startMinutes <= endMinutes) {
+      return currentMinutes < startMinutes || currentMinutes >= endMinutes;
+    }
+    return currentMinutes < startMinutes && currentMinutes >= endMinutes;
+  }
+
+  function normalizeTimeValue(value) {
+    if (value == null) return '';
+    const text = String(value).trim();
+    const match = text.match(/(\d{1,2})[:：](\d{2})/);
+    if (!match) return '';
+    return String(Number(match[1])).padStart(2, '0') + ':' + match[2];
+  }
+
+  function timeToMinutes(value) {
+    const match = String(value || '').match(/^(\d{1,2}):(\d{2})$/);
+    if (!match) return null;
+    return Number(match[1]) * 60 + Number(match[2]);
   }
 
   function escapeHtml(value) {
