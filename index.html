@@ -93,6 +93,25 @@
       background: rgba(255,255,255,.16);
       font-weight: 700;
     }
+    .checkout-area {
+      margin-top: 18px;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+    .btn-checkout {
+      border: 0;
+      border-radius: 16px;
+      padding: 14px 16px;
+      font-size: 1.15rem;
+      font-weight: 900;
+      color: #9f1d16;
+      background: rgba(255,255,255,.94);
+      box-shadow: 0 10px 22px rgba(0,0,0,.16);
+    }
+    .btn-checkout:hover { background: #fff; color: #7f1711; }
+    .btn-checkout:disabled { opacity: .7; cursor: not-allowed; }
+    .checkout-note { font-size: .88rem; color: rgba(255,255,255,.84); }
     @media (max-width: 768px) { iframe { min-height: 430px; } .brand-area { flex-direction: column; align-items: flex-start; gap: 8px; } .brand-copy { border-left: 0; padding-left: 0; } .brand-logo { width: min(200px, 64vw); } .usage-box { min-height: 210px; padding: 18px; } .usage-title { font-size: clamp(2.8rem, 16vw, 4.4rem); } .usage-message { font-size: 1.05rem; } }
   </style>
 </head>
@@ -163,7 +182,7 @@
 
 <script>
   // GASをWebアプリとしてデプロイ後、「ウェブアプリURL」を貼り付けてください。
-  const GAS_ENDPOINT = 'https://script.google.com/macros/s/AKfycbwbefSVJkJrBFJrYkOuT1c1pmnHIa_8RALxLN4ne7r5jp6zIOCcBwrrpTadwl301bBT/exec';
+  const GAS_ENDPOINT = 'https://script.google.com/macros/s/AKfycbx8bTCgmSMLnTPOb9xTxLE5t0nDfXyfL2v8EXMGvfuyg4bjCaggJ6DP2bk7CxCpI-EZ/exec';
 
   // GASのSettingsシートのGAS_API_KEYと同じ値にしてください。
   const API_KEY = '8169';
@@ -174,6 +193,7 @@
   // 利用可能時間はGASのResourceシート由来の値を使用します。
   // HTML側には固定の営業時間を持たせません。
   let operatingHours = { startTime: '', endTime: '' };
+  let currentUsingReservation = null;
   // quickOptionsで本日の予約候補が0件だった場合も、空室ではなく時間外扱いにします。
   let noAvailableStartsForToday = false;
   let latestOptions = null;
@@ -343,6 +363,7 @@
       return;
     }
     if (status.using) {
+      currentUsingReservation = status;
       const detail = escapeHtml((status.startTime || '') + ' - ' + (status.endTime || '') + ' / 確認 ' + (status.checkedAt || ''));
       el.className = 'usage-box usage-panel-busy mb-3';
       el.innerHTML = '<div class="usage-content">' +
@@ -350,14 +371,16 @@
         '<div class="usage-title">使用中</div>' +
         '<div class="usage-message">' + escapeHtml(status.message || 'ただいま利用中です。') + '</div>' +
         '<div class="usage-detail">' + detail + '</div>' +
+        '<div class="checkout-area">' +
+          '<button class="btn-checkout" id="checkoutBtn" type="button" onclick="checkoutNow()">退出して現在時刻で終了</button>' +
+        '</div>' +
         '</div>';
     } else {
+      currentUsingReservation = null;
       el.className = 'usage-box usage-panel-free mb-3';
       el.innerHTML = '<div class="usage-content">' +
         '<div class="usage-top"><span class="usage-label"><span class="usage-dot"></span>入室できます</span><span class="usage-icon">○</span></div>' +
         '<div class="usage-title">空室</div>' +
-        '<div class="usage-message">現在この会議室は空いています。</div>' +
-        '<div class="usage-action-hint">このまま下のボタンから予約できます</div>' +
         '</div>';
     }
   }
@@ -495,6 +518,62 @@
     }
   }
 
+
+  async function checkoutNow() {
+    if (!currentUsingReservation || !currentUsingReservation.using) {
+      setStatus('warning', '現在使用中の予約が見つかりません。');
+      await refreshCurrentStatus();
+      return;
+    }
+    const nowLabel = formatCurrentTimeLabel();
+    const ok = window.confirm('現在時刻（' + nowLabel + '）を終了時刻として退出します。よろしいですか？');
+    if (!ok) return;
+
+    setBusy(true);
+    setCheckoutBusy(true);
+    setStatus('info', '退出処理を実行しています...');
+    try {
+      const params = { api: 'quickCheckout', checkoutTime: nowLabel };
+      const reservationKey = getCurrentReservationKey(currentUsingReservation);
+      if (reservationKey.key && reservationKey.value) params[reservationKey.key] = reservationKey.value;
+      const data = await jsonp(params);
+      setStatus('success', (data.message || '退出しました。終了時刻を現在時刻に更新しました。'));
+      currentUsingReservation = null;
+      await loadOptions({ refreshCalendarFrame: true });
+      setTimeout(refreshCalendar, 3000);
+    } catch (err) {
+      setStatus('danger', err.message || String(err));
+      await loadOptions({ refreshCalendarFrame: true });
+    } finally {
+      setCheckoutBusy(false);
+      setBusy(false);
+    }
+  }
+
+  function getCurrentReservationKey(status) {
+    if (!status || typeof status !== 'object') return { key: '', value: '' };
+    const keyMap = [
+      ['reservationId', 'reservationId'],
+      ['eventId', 'eventId'],
+      ['calendarEventId', 'eventId'],
+      ['id', 'reservationId']
+    ];
+    for (const pair of keyMap) {
+      if (status[pair[0]] != null && String(status[pair[0]]).trim() !== '') {
+        return { key: pair[1], value: String(status[pair[0]]).trim() };
+      }
+    }
+    return { key: '', value: '' };
+  }
+
+  function setCheckoutBusy(flag) {
+    const btn = document.getElementById('checkoutBtn');
+    if (btn) {
+      btn.disabled = !!flag;
+      btn.textContent = flag ? '退出処理中...' : '退出して現在時刻で終了';
+    }
+  }
+
   function refreshCalendar() {
     const frame = document.getElementById('calendarFrame');
     if (!frame) return;
@@ -514,6 +593,7 @@
 
   function setBusy(flag) {
     document.getElementById('reserveBtn').disabled = !!flag;
+    setCheckoutBusy(flag);
   }
 </script>
 </body>
